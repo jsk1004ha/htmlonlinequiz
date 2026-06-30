@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.omx/
+.env
+.env.*
+*.local
+*.log
+.DS_Store
