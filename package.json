@@ -1,14 +1,16 @@
 {
   "name": "htmlonlinequiz",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.2.1",
   "type": "module",
   "scripts": {
-    "dev": "vite --host 127.0.0.1",
+    "dev": "node server/index.js --dev",
+    "dev:client": "vite --host 127.0.0.1",
     "dev:api": "node server/index.js",
     "build": "vite build",
     "start": "node server/index.js",
-    "preview": "npm run build && node server/index.js"
+    "preview": "npm run build && node server/index.js",
+    "check": "node --check server/index.js && node --check src/services/api.js && vite build"
   },
   "dependencies": {
     "better-sqlite3": "^11.10.0",
