@@ -1,0 +1,16 @@
+.status-banner {
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.status-banner.error {
+  border-color: rgba(229, 72, 77, 0.35);
+  background: #fff1f2;
+  color: var(--red);
+}
