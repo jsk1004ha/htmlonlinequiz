@@ -33,9 +33,8 @@ export function isCloudStorageConfigured() {
 export async function initializeCloudStorageBridge() {
   if (!canUseBrowserStorage() || !isCloudStorageConfigured()) return;
 
-  patchLocalStorageWrites();
-
   try {
+    patchLocalStorageWrites();
     isHydrating = true;
     const cloudState = await fetchCloudState();
     const mergedState = hydrateLocalStorage(cloudState);
