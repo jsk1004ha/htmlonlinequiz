@@ -23,7 +23,11 @@ function normalizeSupabaseUrl(value) {
 }
 
 function canUseBrowserStorage() {
-  return typeof window !== "undefined" && typeof window.localStorage !== "undefined";
+  try {
+    return typeof window !== "undefined" && typeof window.localStorage !== "undefined";
+  } catch {
+    return false;
+  }
 }
 
 export function isCloudStorageConfigured() {
@@ -149,13 +153,15 @@ async function supabaseRequest(path, options = {}) {
     },
   });
 
+  const responseText = await response.text();
+
   if (!response.ok) {
-    const message = await response.text().catch(() => response.statusText);
-    throw new Error(`Supabase request failed (${response.status}): ${message}`);
+    throw new Error(
+      `Supabase request failed (${response.status}): ${responseText || response.statusText}`,
+    );
   }
 
-  if (response.status === 204) return null;
-  return response.json();
+  return responseText ? JSON.parse(responseText) : null;
 }
 
 function hydrateLocalStorage(cloudState) {
