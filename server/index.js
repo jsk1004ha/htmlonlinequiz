@@ -11,12 +11,14 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const rootDir = path.resolve(__dirname, "..");
 const distDir = path.join(rootDir, "dist");
+const defaultDataDir = path.join(rootDir, "data");
 const dataDir = process.env.DATA_DIR
   ? path.resolve(process.env.DATA_DIR)
-  : path.join(rootDir, "data");
+  : defaultDataDir;
 const dbPath = process.env.SQLITE_PATH
   ? path.resolve(process.env.SQLITE_PATH)
   : path.join(dataDir, "htmlquizlab.sqlite");
+const dbDir = path.dirname(dbPath);
 
 const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.HOST || "0.0.0.0";
@@ -29,21 +31,27 @@ const MAX_COMMENT_LENGTH = 220;
 const USERNAME_PATTERN = /^[A-Za-z0-9_-]{3,24}$/;
 const SUBJECTS = new Set(["물리", "화학", "생명과학", "지구과학", "한국사"]);
 const STATE_CHANGING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+const hasBuiltClientAtStartup = fs.existsSync(path.join(distDir, "index.html"));
+const isDevServer =
+  process.argv.includes("--dev") ||
+  process.env.VITE_DEV_SERVER === "true" ||
+  (process.env.NODE_ENV !== "production" && !hasBuiltClientAtStartup);
 
-if (!process.env.SESSION_SECRET && process.env.NODE_ENV === "production") {
-  throw new Error("SESSION_SECRET must be set in production.");
-}
+fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+fs.mkdirSync(dbDir, { recursive: true, mode: 0o700 });
 
-const sessionSecret = process.env.SESSION_SECRET || crypto.randomBytes(32).toString("hex");
+const sessionSecret = getSessionSecret();
 const appOrigins = (process.env.APP_ORIGIN || "")
   .split(",")
   .map((origin) => origin.trim())
   .filter(Boolean);
 
-fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
 const db = new Database(dbPath);
 db.pragma("journal_mode = WAL");
 db.pragma("foreign_keys = ON");
+db.pragma("busy_timeout = 5000");
+db.pragma("synchronous = NORMAL");
+lockDownDatabaseFile();
 
 migrateDatabase();
 
@@ -60,6 +68,7 @@ app.use(
         styleSrc: ["'self'", "'unsafe-inline'"],
         imgSrc: ["'self'", "data:", "blob:"],
         fontSrc: ["'self'", "data:"],
+        connectSrc: ["'self'", "ws:", "wss:"],
         frameSrc: ["'self'", "blob:"],
         objectSrc: ["'none'"],
         baseUri: ["'self'"],
@@ -71,7 +80,13 @@ app.use(
   }),
 );
 
-app.use(express.json({ limit: "600kb" }));
+app.use(express.json({ limit: "1mb" }));
+
+app.use("/api", (req, res, next) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("X-Storage-Backend", "sqlite");
+  next();
+});
 
 app.use(
   "/api",
@@ -98,7 +113,13 @@ app.use(rejectCrossSiteMutations);
 app.use(loadSession);
 
 app.get("/api/health", (req, res) => {
-  res.json({ ok: true });
+  res.json({
+    ok: true,
+    storage: "sqlite",
+    mode: isDevServer ? "development" : "production",
+    counts: getStorageCounts(),
+    serverTime: new Date().toISOString(),
+  });
 });
 
 app.get("/api/session", (req, res) => {
@@ -244,20 +265,7 @@ app.use("/api", (req, res) => {
   res.status(404).json({ error: "API 경로를 찾을 수 없습니다." });
 });
 
-if (fs.existsSync(distDir)) {
-  app.use(express.static(distDir, { index: false }));
-  app.use((req, res, next) => {
-    if (req.method !== "GET") return next();
-    res.sendFile(path.join(distDir, "index.html"));
-  });
-} else {
-  app.get("/", (req, res) => {
-    res
-      .status(200)
-      .type("text/plain")
-      .send("HTML Quiz Lab API is running. Build the client with `npm run build` for production.");
-  });
-}
+await configureClientServing();
 
 app.use((error, req, res, next) => {
   console.error(error);
@@ -268,7 +276,63 @@ app.use((error, req, res, next) => {
 app.listen(PORT, HOST, () => {
   console.log(`HTML Quiz Lab server listening on http://${HOST}:${PORT}`);
   console.log(`SQLite database: ${dbPath}`);
+  console.log(`Client mode: ${getClientModeLabel()}`);
 });
+
+async function configureClientServing() {
+  const hasBuiltClient = fs.existsSync(path.join(distDir, "index.html"));
+
+  if (isDevServer) {
+    await useViteDevMiddleware();
+    return;
+  }
+
+  if (!hasBuiltClient) {
+    throw new Error("dist/index.html이 없습니다. 먼저 `npm run build`를 실행하세요.");
+  }
+
+  app.use(express.static(distDir, { index: false }));
+  app.use((req, res, next) => {
+    if (req.method !== "GET") return next();
+    res.sendFile(path.join(distDir, "index.html"));
+  });
+}
+
+async function useViteDevMiddleware() {
+  try {
+    const { createServer: createViteServer } = await import("vite");
+    const vite = await createViteServer({
+      root: rootDir,
+      server: {
+        middlewareMode: true,
+        hmr: {
+          clientPort: Number(process.env.HMR_CLIENT_PORT || PORT),
+        },
+      },
+      appType: "spa",
+    });
+    app.use(vite.middlewares);
+  } catch (error) {
+    if (fs.existsSync(path.join(distDir, "index.html"))) {
+      console.warn("[HTML Quiz Lab] Vite dev middleware unavailable. Serving dist instead.", error);
+      app.use(express.static(distDir, { index: false }));
+      app.use((req, res, next) => {
+        if (req.method !== "GET") return next();
+        res.sendFile(path.join(distDir, "index.html"));
+      });
+      return;
+    }
+    throw new Error(
+      "프론트 개발 서버를 시작하지 못했습니다. `npm install` 후 다시 실행하거나 `npm run build`를 먼저 실행하세요.",
+      { cause: error },
+    );
+  }
+}
+
+function getClientModeLabel() {
+  if (isDevServer) return "vite-middleware";
+  return "dist";
+}
 
 function migrateDatabase() {
   db.exec(`
@@ -402,6 +466,15 @@ function quizExists(quizId) {
   return Boolean(db.prepare("select 1 from quizzes where id = ?").get(quizId));
 }
 
+function getStorageCounts() {
+  return {
+    users: db.prepare("select count(*) as count from users").get().count,
+    quizzes: db.prepare("select count(*) as count from quizzes").get().count,
+    likes: db.prepare("select count(*) as count from quiz_likes").get().count,
+    comments: db.prepare("select count(*) as count from comments").get().count,
+  };
+}
+
 function loadSession(req, res, next) {
   const token = parseCookies(req.headers.cookie || "")[SESSION_COOKIE];
   const session = verifySessionToken(token);
@@ -430,13 +503,38 @@ function rejectCrossSiteMutations(req, res, next) {
   const origin = req.get("origin");
   if (!origin) return next();
 
-  const currentOrigin = `${req.protocol}://${req.get("host")}`;
-  const allowedOrigins = new Set([currentOrigin, ...appOrigins]);
-  if (!allowedOrigins.has(origin)) {
-    return res.status(403).json({ error: "허용되지 않은 요청 출처입니다." });
+  if (!isAllowedMutationOrigin(origin, req)) {
+    return res.status(403).json({
+      error: "허용되지 않은 요청 출처입니다. APP_ORIGIN 또는 프록시 Host/X-Forwarded-Proto 설정을 확인하세요.",
+    });
   }
 
   next();
+}
+
+function isAllowedMutationOrigin(originValue, req) {
+  let origin;
+  try {
+    origin = new URL(originValue);
+  } catch {
+    return false;
+  }
+
+  const currentOrigin = `${req.protocol}://${req.get("host")}`;
+  const forwardedHost = firstForwardedValue(req.get("x-forwarded-host"));
+  const forwardedProto = firstForwardedValue(req.get("x-forwarded-proto"));
+  const forwardedOrigin =
+    forwardedHost && forwardedProto ? `${forwardedProto}://${forwardedHost}` : null;
+  const allowedOrigins = new Set([currentOrigin, forwardedOrigin, ...appOrigins].filter(Boolean));
+
+  if (allowedOrigins.has(origin.origin)) return true;
+
+  const requestHosts = new Set([req.get("host"), forwardedHost].filter(Boolean));
+  return requestHosts.has(origin.host) && ["http:", "https:"].includes(origin.protocol);
+}
+
+function firstForwardedValue(value) {
+  return value ? value.split(",")[0].trim() : "";
 }
 
 function validateUserId(value) {
@@ -519,20 +617,27 @@ function verifyPassword(password, salt, expectedHash) {
 }
 
 function setSessionCookie(res, userId, req) {
-  const secure = req.secure || req.get("x-forwarded-proto") === "https" || process.env.NODE_ENV === "production";
   const token = signSessionToken(userId);
   res.setHeader(
     "Set-Cookie",
-    `${SESSION_COOKIE}=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL_SECONDS}${secure ? "; Secure" : ""}`,
+    `${SESSION_COOKIE}=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL_SECONDS}${shouldUseSecureCookie(req) ? "; Secure" : ""}`,
   );
 }
 
 function clearSessionCookie(res, req) {
-  const secure = req.secure || req.get("x-forwarded-proto") === "https" || process.env.NODE_ENV === "production";
   res.setHeader(
     "Set-Cookie",
-    `${SESSION_COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${secure ? "; Secure" : ""}`,
+    `${SESSION_COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${shouldUseSecureCookie(req) ? "; Secure" : ""}`,
   );
+}
+
+function shouldUseSecureCookie(req) {
+  if (process.env.COOKIE_SECURE === "true") return true;
+  if (process.env.COOKIE_SECURE === "false") return false;
+
+  const origin = req.get("origin") || "";
+  const forwardedProto = firstForwardedValue(req.get("x-forwarded-proto"));
+  return req.secure || forwardedProto === "https" || origin.startsWith("https://");
 }
 
 function signSessionToken(userId) {
@@ -587,4 +692,35 @@ function makeId(prefix) {
 
 function sendValidationError(res, error) {
   return res.status(400).json({ error });
+}
+
+function getSessionSecret() {
+  if (process.env.SESSION_SECRET) return process.env.SESSION_SECRET;
+
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("SESSION_SECRET must be set in production.");
+  }
+
+  const secretPath = path.join(dataDir, ".session-secret");
+  try {
+    if (fs.existsSync(secretPath)) {
+      const savedSecret = fs.readFileSync(secretPath, "utf8").trim();
+      if (savedSecret) return savedSecret;
+    }
+
+    const generatedSecret = crypto.randomBytes(48).toString("base64url");
+    fs.writeFileSync(secretPath, `${generatedSecret}\n`, { mode: 0o600 });
+    return generatedSecret;
+  } catch (error) {
+    console.warn("[HTML Quiz Lab] Could not persist development session secret.", error);
+    return crypto.randomBytes(48).toString("base64url");
+  }
+}
+
+function lockDownDatabaseFile() {
+  try {
+    fs.chmodSync(dbPath, 0o600);
+  } catch {
+    // chmod is best-effort and may fail on Windows or restricted file systems.
+  }
 }
