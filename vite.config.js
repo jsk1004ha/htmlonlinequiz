@@ -3,4 +3,10 @@ import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   plugins: [react()],
+  server: {
+    allowedHosts: ["logingwak.xyz"],
+  },
+  preview: {
+    allowedHosts: ["logingwak.xyz"],
+  },
 });

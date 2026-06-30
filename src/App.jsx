@@ -10,8 +10,9 @@ import {
 const STORAGE_KEYS = {
   users: "htmlquizlab:users",
   currentUser: "htmlquizlab:currentUser",
-  quizzes: "htmlquizlab:quizzes",
+  quizzes: "htmlquizlab:quizzes:v2",
 };
+const LEGACY_QUIZ_STORAGE_KEYS = ["htmlquizlab:quizzes"];
 
 const SUBJECTS = ["전체", "물리", "화학", "생명과학", "지구과학", "한국사"];
 const MAX_HTML_BYTES = 512 * 1024;
@@ -32,88 +33,8 @@ const QUIZ_IFRAME_CSP = [
   "form-action 'none'",
 ].join("; ");
 
-const starterHtml = `<!doctype html>
-<html lang="ko">
-  <head>
-    <meta charset="utf-8" />
-    <style>
-      body { font-family: system-ui, sans-serif; margin: 0; padding: 28px; background: #f8fbff; color: #17202a; }
-      .quiz { max-width: 560px; margin: 0 auto; background: white; border: 1px solid #d9e3ea; border-radius: 18px; padding: 26px; box-shadow: 0 16px 40px rgba(20, 40, 60, .08); }
-      h1 { margin: 0 0 16px; font-size: 26px; }
-      button { border: 0; border-radius: 12px; padding: 12px 14px; margin: 6px 0; width: 100%; background: #e7f2f4; cursor: pointer; font-weight: 700; }
-      button:hover { background: #cbe8ed; }
-      #result { margin-top: 16px; font-weight: 800; color: #0f766e; }
-    </style>
-  </head>
-  <body>
-    <main class="quiz">
-      <h1>HTML 샘플 퀴즈</h1>
-      <p>물의 화학식은?</p>
-      <button onclick="answer(false)">CO2</button>
-      <button onclick="answer(true)">H2O</button>
-      <button onclick="answer(false)">O2</button>
-      <div id="result"></div>
-    </main>
-    <script>
-      function answer(ok) {
-        document.getElementById('result').textContent = ok ? '정답입니다!' : '다시 시도해보세요.';
-      }
-    </script>
-  </body>
-</html>`;
-
-const defaultQuizzes = [
-  {
-    id: "starter-physics-wave",
-    title: "파동과 진동 빠른 점검",
-    subject: "물리",
-    tags: ["파동", "중간고사", "개념"],
-    author: "lab",
-    createdAt: "2026-06-29T12:20:00.000Z",
-    html: `<!doctype html><html lang="ko"><head><meta charset="utf-8"><style>body{margin:0;font-family:system-ui,sans-serif;background:#08111f;color:#f7fafc;padding:32px}.wrap{max-width:680px;margin:auto;background:#111d2e;border:1px solid #2b3f5a;border-radius:22px;padding:30px}button{display:block;width:100%;margin:10px 0;padding:14px;border:0;border-radius:12px;background:#1f7a8c;color:white;font-weight:800;cursor:pointer}button:hover{background:#2c94a8}.ok{color:#8ee3a2;font-weight:900}</style></head><body><section class="wrap"><h1>파동 퀴즈</h1><p>파동의 속력 v를 나타내는 식은?</p><button onclick="pick('오답')">v = f / λ</button><button onclick="pick('정답')">v = fλ</button><button onclick="pick('오답')">v = λ / T</button><p id="r" class="ok"></p></section><script>function pick(v){document.getElementById('r').textContent=v==='정답'?'정답: v = fλ':'오답입니다. 주기와 진동수를 다시 확인하세요.'}</script></body></html>`,
-    plays: 128,
-    likedBy: ["lab", "demo1", "demo2", "demo3", "demo4"],
-    comments: [
-      {
-        id: "c1",
-        author: "demo1",
-        body: "시험 직전에 보기 좋네요.",
-        createdAt: "2026-06-29T13:00:00.000Z",
-      },
-    ],
-  },
-  {
-    id: "starter-history-joseon",
-    title: "한국사 조선 후기 사건 순서",
-    subject: "한국사",
-    tags: ["한국사", "조선", "순서"],
-    author: "historyhub",
-    createdAt: "2026-06-30T02:10:00.000Z",
-    html: `<!doctype html><html lang="ko"><head><meta charset="utf-8"><style>body{font-family:system-ui,sans-serif;margin:0;padding:28px;background:#fff7ed;color:#1f2937}.box{max-width:600px;margin:auto;background:white;border:1px solid #fed7aa;border-radius:20px;padding:28px}button{padding:12px 16px;border-radius:12px;border:1px solid #f59e0b;background:#fffbeb;margin:6px;cursor:pointer}.result{font-weight:900;color:#b45309}</style></head><body><div class="box"><h1>사건 순서</h1><p>다음 중 가장 먼저 일어난 사건은?</p><button onclick="go(false)">임오군란</button><button onclick="go(true)">흥선대원군 집권</button><button onclick="go(false)">갑신정변</button><p id="result" class="result"></p></div><script>function go(ok){result.textContent=ok?'정답입니다.':'연표를 다시 확인하세요.'}</script></body></html>`,
-    plays: 94,
-    likedBy: ["demo1", "demo2", "demo3"],
-    comments: [],
-  },
-  {
-    id: "starter-biology-cell",
-    title: "세포 소기관 매칭",
-    subject: "생명과학",
-    tags: ["세포", "소기관", "암기"],
-    author: "bio-maker",
-    createdAt: "2026-06-30T07:30:00.000Z",
-    html: `<!doctype html><html lang="ko"><head><meta charset="utf-8"><style>body{font-family:system-ui,sans-serif;background:#eefdf5;padding:24px}.card{max-width:620px;margin:auto;background:white;border-radius:18px;border:1px solid #bbf7d0;padding:28px}.choice{display:flex;gap:8px;flex-wrap:wrap}.choice button{border:0;background:#dcfce7;border-radius:999px;padding:10px 15px;font-weight:800;cursor:pointer}strong{color:#15803d}</style></head><body><main class="card"><h1>세포 소기관</h1><p><strong>ATP 생성</strong>과 가장 관련 깊은 소기관은?</p><div class="choice"><button onclick="r(false)">리보솜</button><button onclick="r(true)">미토콘드리아</button><button onclick="r(false)">골지체</button></div><h2 id="out"></h2></main><script>function r(ok){out.textContent=ok?'정답입니다':'다시 선택해보세요'}</script></body></html>`,
-    plays: 67,
-    likedBy: ["demo2", "demo3", "demo4", "demo5"],
-    comments: [
-      {
-        id: "c2",
-        author: "demo5",
-        body: "소기관 파트 복습용으로 좋아요.",
-        createdAt: "2026-06-30T08:00:00.000Z",
-      },
-    ],
-  },
-];
+const starterHtml = "";
+const defaultQuizzes = [];
 
 function readJson(key, fallback) {
   try {
@@ -278,8 +199,9 @@ function App() {
   const [query, setQuery] = useState("");
   const deferredQuery = useDeferredValue(query);
   const [subject, setSubject] = useState("전체");
-  const [selectedQuizId, setSelectedQuizId] = useState(defaultQuizzes[0].id);
+  const [selectedQuizId, setSelectedQuizId] = useState(null);
   const [view, setView] = useState("home");
+  const [pendingProtectedAction, setPendingProtectedAction] = useState(null);
   const [authOpen, setAuthOpen] = useState(false);
   const [authMode, setAuthMode] = useState("login");
   const [authForm, setAuthForm] = useState({ id: "", password: "" });
@@ -295,6 +217,10 @@ function App() {
     html: starterHtml,
     fileName: "",
   });
+
+  useEffect(() => {
+    LEGACY_QUIZ_STORAGE_KEYS.forEach((key) => localStorage.removeItem(key));
+  }, []);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.users, JSON.stringify(users));
@@ -325,6 +251,7 @@ function App() {
       if (event.key === "Escape") {
         setAuthOpen(false);
         setAuthError("");
+        setPendingProtectedAction(null);
       }
     }
     document.addEventListener("keydown", closeOnEscape);
@@ -361,7 +288,7 @@ function App() {
   }, [filteredQuizzes]);
 
   const activeQuiz =
-    quizzes.find((quiz) => quiz.id === selectedQuizId) || quizzes[0];
+    quizzes.find((quiz) => quiz.id === selectedQuizId) || quizzes[0] || null;
 
   const totalPlays = useMemo(
     () => quizzes.reduce((sum, quiz) => sum + quiz.plays, 0),
@@ -369,8 +296,8 @@ function App() {
   );
 
   const safeActiveQuizHtml = useMemo(
-    () => buildSafeQuizDocument(activeQuiz?.html || draft.html),
-    [activeQuiz?.html, draft.html],
+    () => buildSafeQuizDocument(activeQuiz?.html || ""),
+    [activeQuiz?.html],
   );
 
   const safeDraftHtml = useMemo(
@@ -388,11 +315,38 @@ function App() {
     return subject === "전체" ? "전체 퀴즈" : `${subject} 퀴즈`;
   }, [deferredQuery, subject]);
 
-  function requireLogin() {
+  function openQuizById(quizId) {
+    setSelectedQuizId(quizId);
+    setView("play");
+    setQuizzes((previous) =>
+      previous.map((quiz) =>
+        quiz.id === quizId ? { ...quiz, plays: quiz.plays + 1 } : quiz,
+      ),
+    );
+  }
+
+  function runProtectedAction(action) {
+    if (!action) return;
+    if (action.type === "play") {
+      openQuizById(action.quizId);
+      return;
+    }
+    if (action.type === "view") {
+      setView(action.view);
+    }
+  }
+
+  function requireLogin(action = null) {
     if (currentUser) return true;
+    setPendingProtectedAction(action);
     setAuthMode("login");
     setAuthOpen(true);
     return false;
+  }
+
+  function openProtectedView(nextView) {
+    if (!requireLogin({ type: "view", view: nextView })) return;
+    setView(nextView);
   }
 
   async function handleAuthSubmit(event) {
@@ -452,19 +406,16 @@ function App() {
       setCurrentUser({ id });
     }
 
+    runProtectedAction(pendingProtectedAction);
+    setPendingProtectedAction(null);
     setAuthForm({ id: "", password: "" });
     setAuthError("");
     setAuthOpen(false);
   }
 
   function handleQuizPlay(quizId) {
-    setSelectedQuizId(quizId);
-    setView("play");
-    setQuizzes((previous) =>
-      previous.map((quiz) =>
-        quiz.id === quizId ? { ...quiz, plays: quiz.plays + 1 } : quiz,
-      ),
-    );
+    if (!requireLogin({ type: "play", quizId })) return;
+    openQuizById(quizId);
   }
 
   function toggleLike(quizId) {
@@ -532,7 +483,7 @@ function App() {
 
   function handleCreateQuiz(event) {
     event.preventDefault();
-    if (!requireLogin()) return;
+    if (!requireLogin({ type: "view", view: "create" })) return;
     const title = normalizeText(draft.title, MAX_TITLE_LENGTH);
     if (!title || !draft.html.trim()) {
       window.alert("퀴즈 이름과 HTML 코드를 입력하세요.");
@@ -620,14 +571,14 @@ function App() {
           </button>
           <button
             className={view === "play" ? "active" : ""}
-            onClick={() => setView("play")}
+            onClick={() => openProtectedView("play")}
             type="button"
           >
             퀴즈 플레이
           </button>
           <button
             className={view === "create" ? "active" : ""}
-            onClick={() => setView("create")}
+            onClick={() => openProtectedView("create")}
             type="button"
           >
             퀴즈 제작
@@ -640,7 +591,14 @@ function App() {
                 <Icon name="user" />
                 {currentUser.id}
               </span>
-              <button className="ghost-button" onClick={() => setCurrentUser(null)}>
+              <button
+                className="ghost-button"
+                onClick={() => {
+                  setCurrentUser(null);
+                  setPendingProtectedAction(null);
+                  setView("home");
+                }}
+              >
                 로그아웃
               </button>
             </>
@@ -649,6 +607,7 @@ function App() {
               <button
                 className="ghost-button"
                 onClick={() => {
+                  setPendingProtectedAction(null);
                   setAuthMode("login");
                   setAuthOpen(true);
                 }}
@@ -658,6 +617,7 @@ function App() {
               <button
                 className="primary-button"
                 onClick={() => {
+                  setPendingProtectedAction(null);
                   setAuthMode("register");
                   setAuthOpen(true);
                 }}
@@ -683,7 +643,7 @@ function App() {
             onSubjectChange={setSubject}
             onPlay={handleQuizPlay}
             onLike={toggleLike}
-            onCreate={() => setView("create")}
+            onCreate={() => openProtectedView("create")}
           />
         )}
 
@@ -698,7 +658,7 @@ function App() {
             newestQuizzes={newestQuizzes}
             onLike={toggleLike}
             onPlay={handleQuizPlay}
-            onCreate={() => setView("create")}
+            onCreate={() => openProtectedView("create")}
             onCommentChange={setComment}
             onCommentSubmit={handleCommentSubmit}
             onToggleFullscreen={togglePlayerFullscreen}
@@ -728,6 +688,7 @@ function App() {
                 onClick={() => {
                   setAuthOpen(false);
                   setAuthError("");
+                  setPendingProtectedAction(null);
                 }}
                 aria-label="닫기"
               >
@@ -1153,6 +1114,7 @@ function CreateView({
                   }))
                 }
                 maxLength={MAX_HTML_BYTES}
+                placeholder="HTML 코드를 입력하거나 HTML 업로드를 선택하세요."
                 spellCheck="false"
               />
             </label>
