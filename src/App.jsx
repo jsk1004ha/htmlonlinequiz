@@ -6,13 +6,18 @@ import {
   useRef,
   useState,
 } from "react";
-
-const STORAGE_KEYS = {
-  users: "htmlquizlab:users",
-  currentUser: "htmlquizlab:currentUser",
-  quizzes: "htmlquizlab:quizzes:v2",
-};
-const LEGACY_QUIZ_STORAGE_KEYS = ["htmlquizlab:quizzes"];
+import {
+  addQuizComment,
+  createQuiz,
+  fetchCurrentSession,
+  fetchQuizzes,
+  loginUser,
+  logoutUser,
+  recordQuizPlay,
+  registerUser,
+  toggleQuizLike,
+} from "./services/api.js";
+import "./serverStatus.css";
 
 const SUBJECTS = ["전체", "물리", "화학", "생명과학", "지구과학", "한국사"];
 const MAX_HTML_BYTES = 512 * 1024;
@@ -35,48 +40,6 @@ const QUIZ_IFRAME_CSP = [
 
 const starterHtml = "";
 const defaultQuizzes = [];
-
-function readJson(key, fallback) {
-  try {
-    const raw = localStorage.getItem(key);
-    return raw ? JSON.parse(raw) : fallback;
-  } catch {
-    return fallback;
-  }
-}
-
-async function digestText(value) {
-  const data = new TextEncoder().encode(value);
-  const buffer = await crypto.subtle.digest("SHA-256", data);
-  return Array.from(new Uint8Array(buffer))
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
-}
-
-async function hashPassword(password, salt) {
-  return digestText(`${salt}:${password}`);
-}
-
-async function hashLegacyPassword(password) {
-  return digestText(password);
-}
-
-function makeSalt() {
-  const bytes = new Uint8Array(16);
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes)
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
-}
-
-function makeId(prefix) {
-  const bytes = new Uint8Array(8);
-  crypto.getRandomValues(bytes);
-  const random = Array.from(bytes)
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
-  return `${prefix}-${Date.now()}-${random}`;
-}
 
 function normalizeText(value, maxLength) {
   return value.trim().replace(/\s+/g, " ").slice(0, maxLength);
@@ -119,6 +82,10 @@ function formatDate(value) {
   }).format(new Date(value));
 }
 
+function getErrorMessage(error, fallback) {
+  return error instanceof Error && error.message ? error.message : fallback;
+}
+
 function Icon({ name }) {
   const common = {
     width: 18,
@@ -138,17 +105,11 @@ function Icon({ name }) {
         <path d="m20 20-3.5-3.5" />
       </>
     ),
-    play: (
-      <path d="M8 5v14l11-7Z" fill="currentColor" stroke="none" />
-    ),
+    play: <path d="M8 5v14l11-7Z" fill="currentColor" stroke="none" />,
     heart: (
       <path d="M20.8 8.8c0 5.3-8.8 10.2-8.8 10.2S3.2 14.1 3.2 8.8A4.6 4.6 0 0 1 12 6.9a4.6 4.6 0 0 1 8.8 1.9Z" />
     ),
-    comment: (
-      <>
-        <path d="M21 14a4 4 0 0 1-4 4H9l-6 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4Z" />
-      </>
-    ),
+    comment: <path d="M21 14a4 4 0 0 1-4 4H9l-6 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4Z" />,
     upload: (
       <>
         <path d="M12 16V4" />
@@ -179,7 +140,7 @@ function Icon({ name }) {
     minimize: (
       <>
         <path d="M8 3v3a2 2 0 0 1-2 2H3" />
-        <path d="M16 3v3a2 2 0 0 0 2 2h3" />
+        <path d="M16 3h3a2 2 0 0 0 2 2h3" />
         <path d="M8 21v-3a2 2 0 0 0-2-2H3" />
         <path d="M16 21v-3a2 2 0 0 1 2-2h3" />
       </>
@@ -189,13 +150,10 @@ function Icon({ name }) {
 }
 
 function App() {
-  const [users, setUsers] = useState(() => readJson(STORAGE_KEYS.users, []));
-  const [currentUser, setCurrentUser] = useState(() =>
-    readJson(STORAGE_KEYS.currentUser, null),
-  );
-  const [quizzes, setQuizzes] = useState(() =>
-    readJson(STORAGE_KEYS.quizzes, defaultQuizzes),
-  );
+  const [currentUser, setCurrentUser] = useState(null);
+  const [quizzes, setQuizzes] = useState(defaultQuizzes);
+  const [isLoading, setIsLoading] = useState(true);
+  const [apiError, setApiError] = useState("");
   const [query, setQuery] = useState("");
   const deferredQuery = useDeferredValue(query);
   const [subject, setSubject] = useState("전체");
@@ -219,20 +177,32 @@ function App() {
   });
 
   useEffect(() => {
-    LEGACY_QUIZ_STORAGE_KEYS.forEach((key) => localStorage.removeItem(key));
+    let isMounted = true;
+
+    async function loadInitialData() {
+      try {
+        const [sessionPayload, quizzesPayload] = await Promise.all([
+          fetchCurrentSession(),
+          fetchQuizzes(),
+        ]);
+        if (!isMounted) return;
+        setCurrentUser(sessionPayload.user || null);
+        setQuizzes(quizzesPayload.quizzes || []);
+        setApiError("");
+      } catch (error) {
+        if (isMounted) {
+          setApiError(getErrorMessage(error, "서버 데이터를 불러오지 못했습니다."));
+        }
+      } finally {
+        if (isMounted) setIsLoading(false);
+      }
+    }
+
+    loadInitialData();
+    return () => {
+      isMounted = false;
+    };
   }, []);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.users, JSON.stringify(users));
-  }, [users]);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.currentUser, JSON.stringify(currentUser));
-  }, [currentUser]);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.quizzes, JSON.stringify(quizzes));
-  }, [quizzes]);
 
   useEffect(() => {
     function syncFullscreenState() {
@@ -241,8 +211,7 @@ function App() {
       }
     }
     document.addEventListener("fullscreenchange", syncFullscreenState);
-    return () =>
-      document.removeEventListener("fullscreenchange", syncFullscreenState);
+    return () => document.removeEventListener("fullscreenchange", syncFullscreenState);
   }, []);
 
   useEffect(() => {
@@ -262,7 +231,7 @@ function App() {
     const normalizedQuery = deferredQuery.trim().toLowerCase();
     return quizzes.filter((quiz) => {
       const matchesSubject = subject === "전체" || quiz.subject === subject;
-      const searchable = [quiz.title, quiz.subject, quiz.author, ...quiz.tags]
+      const searchable = [quiz.title, quiz.subject, quiz.author, ...(quiz.tags || [])]
         .join(" ")
         .toLowerCase();
       return matchesSubject && searchable.includes(normalizedQuery);
@@ -273,10 +242,10 @@ function App() {
     return [...filteredQuizzes]
       .sort(
         (a, b) =>
-          b.likedBy.length * 3 +
-          b.comments.length * 2 +
+          (b.likedBy?.length || 0) * 3 +
+          (b.comments?.length || 0) * 2 +
           b.plays -
-          (a.likedBy.length * 3 + a.comments.length * 2 + a.plays),
+          ((a.likedBy?.length || 0) * 3 + (a.comments?.length || 0) * 2 + a.plays),
       )
       .slice(0, 4);
   }, [filteredQuizzes]);
@@ -306,7 +275,7 @@ function App() {
   );
 
   const selectedIsLiked = Boolean(
-    currentUser && activeQuiz?.likedBy.includes(currentUser.id),
+    currentUser && activeQuiz?.likedBy?.includes(currentUser.id),
   );
 
   const resultLabel = useMemo(() => {
@@ -315,20 +284,40 @@ function App() {
     return subject === "전체" ? "전체 퀴즈" : `${subject} 퀴즈`;
   }, [deferredQuery, subject]);
 
-  function openQuizById(quizId) {
-    setSelectedQuizId(quizId);
-    setView("play");
-    setQuizzes((previous) =>
-      previous.map((quiz) =>
-        quiz.id === quizId ? { ...quiz, plays: quiz.plays + 1 } : quiz,
-      ),
-    );
+  function replaceQuiz(nextQuiz) {
+    if (!nextQuiz) return;
+    setQuizzes((previous) => {
+      const exists = previous.some((quiz) => quiz.id === nextQuiz.id);
+      if (!exists) return [nextQuiz, ...previous];
+      return previous.map((quiz) => (quiz.id === nextQuiz.id ? nextQuiz : quiz));
+    });
   }
 
-  function runProtectedAction(action) {
+  async function refreshQuizzes() {
+    const payload = await fetchQuizzes();
+    setQuizzes(payload.quizzes || []);
+    return payload.quizzes || [];
+  }
+
+  async function openQuizById(quizId, options = {}) {
+    if (!options.skipAuth && !requireLogin({ type: "play", quizId })) return;
+
+    setSelectedQuizId(quizId);
+    setView("play");
+    setApiError("");
+
+    try {
+      const payload = await recordQuizPlay(quizId);
+      replaceQuiz(payload.quiz);
+    } catch (error) {
+      setApiError(getErrorMessage(error, "플레이 기록을 저장하지 못했습니다."));
+    }
+  }
+
+  async function runProtectedAction(action) {
     if (!action) return;
     if (action.type === "play") {
-      openQuizById(action.quizId);
+      await openQuizById(action.quizId, { skipAuth: true });
       return;
     }
     if (action.type === "view") {
@@ -363,95 +352,71 @@ function App() {
       return;
     }
 
-    if (password.length < 6) {
-      setAuthError("비밀번호는 6자 이상이어야 합니다.");
+    if (password.length < 6 || password.length > 128) {
+      setAuthError("비밀번호는 6~128자여야 합니다.");
       return;
     }
 
-    if (authMode === "register") {
-      if (users.some((user) => user.id === id)) {
-        setAuthError("이미 사용 중인 아이디입니다.");
-        return;
-      }
-      const salt = makeSalt();
-      const passwordHash = await hashPassword(password, salt);
-      const newUser = {
-        id,
-        salt,
-        passwordHash,
-        joinedAt: new Date().toISOString(),
-      };
-      setUsers((previous) => [...previous, newUser]);
-      setCurrentUser({ id });
-    } else {
-      const user = users.find((storedUser) => storedUser.id === id);
-      const passwordHash = user?.salt
-        ? await hashPassword(password, user.salt)
-        : await hashLegacyPassword(password);
-      if (!user || user.passwordHash !== passwordHash) {
-        setAuthError("아이디 또는 비밀번호가 맞지 않습니다.");
-        return;
-      }
-      if (!user.salt) {
-        const salt = makeSalt();
-        const upgradedHash = await hashPassword(password, salt);
-        setUsers((previous) =>
-          previous.map((storedUser) =>
-            storedUser.id === id
-              ? { ...storedUser, salt, passwordHash: upgradedHash }
-              : storedUser,
-          ),
-        );
-      }
-      setCurrentUser({ id });
-    }
-
-    runProtectedAction(pendingProtectedAction);
-    setPendingProtectedAction(null);
-    setAuthForm({ id: "", password: "" });
+    const action = pendingProtectedAction;
     setAuthError("");
-    setAuthOpen(false);
+
+    try {
+      const payload =
+        authMode === "register"
+          ? await registerUser({ id, password })
+          : await loginUser({ id, password });
+      setCurrentUser(payload.user);
+      setPendingProtectedAction(null);
+      setAuthForm({ id: "", password: "" });
+      setAuthOpen(false);
+      await refreshQuizzes();
+      await runProtectedAction(action);
+    } catch (error) {
+      setAuthError(getErrorMessage(error, "인증 요청을 처리하지 못했습니다."));
+    }
+  }
+
+  async function handleLogout() {
+    try {
+      await logoutUser();
+    } catch (error) {
+      setApiError(getErrorMessage(error, "로그아웃 요청을 처리하지 못했습니다."));
+    } finally {
+      setCurrentUser(null);
+      setPendingProtectedAction(null);
+      setView("home");
+    }
   }
 
   function handleQuizPlay(quizId) {
-    if (!requireLogin({ type: "play", quizId })) return;
     openQuizById(quizId);
   }
 
-  function toggleLike(quizId) {
+  async function toggleLike(quizId) {
     if (!requireLogin()) return;
-    setQuizzes((previous) =>
-      previous.map((quiz) => {
-        if (quiz.id !== quizId) return quiz;
-        const hasLiked = quiz.likedBy.includes(currentUser.id);
-        return {
-          ...quiz,
-          likedBy: hasLiked
-            ? quiz.likedBy.filter((id) => id !== currentUser.id)
-            : [...quiz.likedBy, currentUser.id],
-        };
-      }),
-    );
+    setApiError("");
+
+    try {
+      const payload = await toggleQuizLike(quizId);
+      replaceQuiz(payload.quiz);
+    } catch (error) {
+      setApiError(getErrorMessage(error, "좋아요를 저장하지 못했습니다."));
+    }
   }
 
-  function handleCommentSubmit(event) {
+  async function handleCommentSubmit(event) {
     event.preventDefault();
     const body = normalizeText(comment, MAX_COMMENT_LENGTH);
     if (!requireLogin() || !body || !activeQuiz) return;
-    const nextComment = {
-      id: makeId("comment"),
-      author: currentUser.id,
-      body,
-      createdAt: new Date().toISOString(),
-    };
-    setQuizzes((previous) =>
-      previous.map((quiz) =>
-        quiz.id === activeQuiz.id
-          ? { ...quiz, comments: [...quiz.comments, nextComment] }
-          : quiz,
-      ),
-    );
-    setComment("");
+    setApiError("");
+
+    try {
+      const payload = await addQuizComment(activeQuiz.id, body);
+      replaceQuiz(payload.quiz);
+      setComment("");
+    } catch (error) {
+      setApiError(getErrorMessage(error, "댓글을 저장하지 못했습니다."));
+    }
   }
 
   async function handleFileChange(event) {
@@ -475,13 +440,12 @@ function App() {
       html,
       fileName: file.name,
       title:
-        previous.title ||
-        normalizeText(file.name.replace(/\.html$/i, ""), MAX_TITLE_LENGTH),
+        previous.title || normalizeText(file.name.replace(/\.html$/i, ""), MAX_TITLE_LENGTH),
     }));
     setStudioTab("upload");
   }
 
-  function handleCreateQuiz(event) {
+  async function handleCreateQuiz(event) {
     event.preventDefault();
     if (!requireLogin({ type: "view", view: "create" })) return;
     const title = normalizeText(draft.title, MAX_TITLE_LENGTH);
@@ -498,29 +462,30 @@ function App() {
       .map((tag) => normalizeText(tag, 20))
       .filter(Boolean)
       .slice(0, 6);
-    const newQuiz = {
-      id: makeId("quiz"),
-      title,
-      subject: draft.subject,
-      tags,
-      author: currentUser.id,
-      createdAt: new Date().toISOString(),
-      html: draft.html,
-      plays: 0,
-      likedBy: [],
-      comments: [],
-    };
-    setQuizzes((previous) => [newQuiz, ...previous]);
-    setSelectedQuizId(newQuiz.id);
-    setDraft({
-      title: "",
-      subject: "물리",
-      tags: "",
-      html: starterHtml,
-      fileName: "",
-    });
-    setStudioTab("write");
-    setView("play");
+
+    setApiError("");
+
+    try {
+      const payload = await createQuiz({
+        title,
+        subject: draft.subject,
+        tags,
+        html: draft.html,
+      });
+      replaceQuiz(payload.quiz);
+      setSelectedQuizId(payload.quiz.id);
+      setDraft({
+        title: "",
+        subject: "물리",
+        tags: "",
+        html: starterHtml,
+        fileName: "",
+      });
+      setStudioTab("write");
+      setView("play");
+    } catch (error) {
+      setApiError(getErrorMessage(error, "퀴즈를 등록하지 못했습니다."));
+    }
   }
 
   async function togglePlayerFullscreen() {
@@ -591,14 +556,7 @@ function App() {
                 <Icon name="user" />
                 {currentUser.id}
               </span>
-              <button
-                className="ghost-button"
-                onClick={() => {
-                  setCurrentUser(null);
-                  setPendingProtectedAction(null);
-                  setView("home");
-                }}
-              >
+              <button className="ghost-button" onClick={handleLogout} type="button">
                 로그아웃
               </button>
             </>
@@ -611,6 +569,7 @@ function App() {
                   setAuthMode("login");
                   setAuthOpen(true);
                 }}
+                type="button"
               >
                 로그인
               </button>
@@ -621,6 +580,7 @@ function App() {
                   setAuthMode("register");
                   setAuthOpen(true);
                 }}
+                type="button"
               >
                 회원가입
               </button>
@@ -630,6 +590,12 @@ function App() {
       </header>
 
       <main className={`workspace ${view}-workspace`} id="top">
+        {(isLoading || apiError) && (
+          <div className={`status-banner ${apiError ? "error" : ""}`} role="status">
+            {apiError || "SQLite 서버에서 데이터를 불러오는 중입니다."}
+          </div>
+        )}
+
         {view === "home" && (
           <HomeView
             resultLabel={resultLabel}
@@ -691,6 +657,7 @@ function App() {
                   setPendingProtectedAction(null);
                 }}
                 aria-label="닫기"
+                type="button"
               >
                 ×
               </button>
@@ -701,10 +668,7 @@ function App() {
                 <input
                   value={authForm.id}
                   onChange={(event) =>
-                    setAuthForm((previous) => ({
-                      ...previous,
-                      id: event.target.value,
-                    }))
+                    setAuthForm((previous) => ({ ...previous, id: event.target.value }))
                   }
                   autoFocus
                   autoComplete="username"
@@ -722,9 +686,7 @@ function App() {
                     }))
                   }
                   type="password"
-                  autoComplete={
-                    authMode === "login" ? "current-password" : "new-password"
-                  }
+                  autoComplete={authMode === "login" ? "current-password" : "new-password"}
                 />
               </label>
               {authError && (
@@ -742,6 +704,7 @@ function App() {
                 setAuthMode(authMode === "login" ? "register" : "login");
                 setAuthError("");
               }}
+              type="button"
             >
               {authMode === "login" ? "회원가입으로 전환" : "로그인으로 전환"}
             </button>
@@ -853,9 +816,7 @@ function PlayView({
     );
   }
 
-  const otherQuizzes = newestQuizzes
-    .filter((quiz) => quiz.id !== activeQuiz.id)
-    .slice(0, 4);
+  const otherQuizzes = newestQuizzes.filter((quiz) => quiz.id !== activeQuiz.id).slice(0, 4);
 
   return (
     <section className="screen play-screen" aria-label="퀴즈 플레이 화면">
@@ -879,9 +840,7 @@ function PlayView({
 
       <div className="play-layout">
         <section
-          className={`studio-panel player-panel ${
-            isPlayerFullscreen ? "is-fullscreen" : ""
-          }`}
+          className={`studio-panel player-panel ${isPlayerFullscreen ? "is-fullscreen" : ""}`}
           ref={playerPanelRef}
         >
           <div className="panel-heading player-heading">
@@ -903,9 +862,7 @@ function PlayView({
                 className="utility-button"
                 onClick={onToggleFullscreen}
                 type="button"
-                aria-label={
-                  isPlayerFullscreen ? "퀴즈 전체화면 종료" : "퀴즈 전체화면"
-                }
+                aria-label={isPlayerFullscreen ? "퀴즈 전체화면 종료" : "퀴즈 전체화면"}
               >
                 <Icon name={isPlayerFullscreen ? "minimize" : "maximize"} />
                 {isPlayerFullscreen ? "나가기" : "전체화면"}
@@ -942,9 +899,7 @@ function PlayView({
                 <input
                   value={comment}
                   onChange={(event) =>
-                    onCommentChange(
-                      event.target.value.slice(0, MAX_COMMENT_LENGTH),
-                    )
+                    onCommentChange(event.target.value.slice(0, MAX_COMMENT_LENGTH))
                   }
                   maxLength={MAX_COMMENT_LENGTH}
                   placeholder="댓글 작성"
@@ -985,9 +940,7 @@ function PlayView({
                     onClick={() => onPlay(quiz.id)}
                     type="button"
                   >
-                    <span className={`subject-badge subject-${quiz.subject}`}>
-                      {quiz.subject}
-                    </span>
+                    <span className={`subject-badge subject-${quiz.subject}`}>{quiz.subject}</span>
                     <strong>{quiz.title}</strong>
                     <small>
                       {quiz.plays}회 · 댓글 {quiz.comments.length}
@@ -1066,10 +1019,7 @@ function CreateView({
                 <select
                   value={draft.subject}
                   onChange={(event) =>
-                    onDraftChange((previous) => ({
-                      ...previous,
-                      subject: event.target.value,
-                    }))
+                    onDraftChange((previous) => ({ ...previous, subject: event.target.value }))
                   }
                 >
                   {SUBJECTS.filter((item) => item !== "전체").map((item) => (
@@ -1108,10 +1058,7 @@ function CreateView({
               <textarea
                 value={draft.html}
                 onChange={(event) =>
-                  onDraftChange((previous) => ({
-                    ...previous,
-                    html: event.target.value,
-                  }))
+                  onDraftChange((previous) => ({ ...previous, html: event.target.value }))
                 }
                 maxLength={MAX_HTML_BYTES}
                 placeholder="HTML 코드를 입력하거나 HTML 업로드를 선택하세요."
@@ -1212,6 +1159,7 @@ const QuizCard = memo(function QuizCard({ quiz, active, liked, onPlay, onLike })
             className={`stat-button ${liked ? "active" : ""}`}
             onClick={onLike}
             aria-label={`${quiz.title} 좋아요`}
+            type="button"
           >
             <Icon name="heart" />
             {quiz.likedBy.length}
@@ -1222,7 +1170,7 @@ const QuizCard = memo(function QuizCard({ quiz, active, liked, onPlay, onLike })
           </span>
           <span>{quiz.plays}회</span>
         </div>
-        <button className="play-button" onClick={onPlay}>
+        <button className="play-button" onClick={onPlay} type="button">
           <Icon name="play" />
           플레이
         </button>
