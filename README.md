@@ -48,11 +48,14 @@ npm run dev:client
 
 ```bash
 npm install
-npm run build
 SESSION_SECRET="$(openssl rand -base64 48)" npm run start
 ```
 
-빌드된 `dist/index.html`이 있으면 `npm run start`는 정적 파일과 `/api`를 같은 Express 서버에서 제공합니다. `dist`가 없고 `NODE_ENV=production`이 아니면 개발 편의를 위해 Vite 미들웨어로 프론트를 제공합니다.
+`npm run start`는 먼저 React 프론트를 빌드한 뒤, 빌드된 정적 파일과 `/api`를 같은 Express 서버에서 제공합니다. 이미 빌드된 파일만 서버로 띄우고 싶다면 다음 명령을 사용합니다.
+
+```bash
+SESSION_SECRET="$(openssl rand -base64 48)" npm run serve
+```
 
 ## SQLite DB 위치
 
