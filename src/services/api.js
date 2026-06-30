@@ -23,7 +23,7 @@ async function apiRequest(path, options = {}) {
     if (error?.name === "AbortError") {
       throw new Error("API 서버 응답 시간이 초과되었습니다. SQLite 서버가 실행 중인지 확인하세요.");
     }
-    throw new Error("API 서버에 연결할 수 없습니다. Vite 단독 실행이 아니라 `npm run dev` 통합 서버 또는 `npm run build && npm run start`로 실행하세요.");
+    throw new Error("API 서버에 연결할 수 없습니다. Vite 단독 실행이 아니라 `npm run dev` 통합 서버 또는 `npm run start`로 실행하세요.");
   } finally {
     window.clearTimeout(timeoutId);
   }
@@ -34,7 +34,8 @@ async function apiRequest(path, options = {}) {
 
   if (!isJson) {
     const storageHeader = response.headers.get("x-storage-backend");
-    if (!storageHeader && responseText.trim().startsWith("<!DOCTYPE html")) {
+    const lowerText = responseText.trim().toLowerCase();
+    if (!storageHeader && (lowerText.startsWith("<!doctype html") || lowerText.startsWith("<html"))) {
       throw new Error("API 대신 프론트 HTML이 응답했습니다. 서버 SQLite API가 붙은 통합 서버로 실행해야 저장됩니다.");
     }
     throw new Error("API 서버가 JSON 응답을 반환하지 않았습니다. `/api/health`가 SQLite 서버에서 열리는지 확인하세요.");
