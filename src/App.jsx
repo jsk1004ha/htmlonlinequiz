@@ -37,6 +37,54 @@ const QUIZ_IFRAME_CSP = [
   "base-uri 'none'",
   "form-action 'none'",
 ].join("; ");
+const QUIZ_STORAGE_GUARD = `<script>
+(() => {
+  function createMemoryStorage() {
+    const store = new Map();
+    return {
+      get length() {
+        return store.size;
+      },
+      key(index) {
+        return Array.from(store.keys())[Number(index)] ?? null;
+      },
+      getItem(key) {
+        key = String(key);
+        return store.has(key) ? store.get(key) : null;
+      },
+      setItem(key, value) {
+        store.set(String(key), String(value));
+      },
+      removeItem(key) {
+        store.delete(String(key));
+      },
+      clear() {
+        store.clear();
+      },
+    };
+  }
+
+  function ensureUsableStorage(name) {
+    try {
+      const storage = window[name];
+      const probe = "__htmlquizlab_storage_probe__";
+      storage.setItem(probe, probe);
+      storage.removeItem(probe);
+      return;
+    } catch (error) {
+      try {
+        Object.defineProperty(window, name, {
+          value: createMemoryStorage(),
+          configurable: true,
+        });
+      } catch (defineError) {}
+    }
+  }
+
+  ensureUsableStorage("localStorage");
+  ensureUsableStorage("sessionStorage");
+})();
+</script>`;
 
 const starterHtml = "";
 const defaultQuizzes = [];
@@ -61,16 +109,17 @@ function buildSafeQuizDocument(html) {
   const cspMeta = `<meta http-equiv="Content-Security-Policy" content="${escapeAttribute(
     QUIZ_IFRAME_CSP,
   )}">`;
+  const guards = `${cspMeta}${QUIZ_STORAGE_GUARD}`;
   if (/<head(\s[^>]*)?>/i.test(html)) {
-    return html.replace(/<head(\s[^>]*)?>/i, (match) => `${match}${cspMeta}`);
+    return html.replace(/<head(\s[^>]*)?>/i, (match) => `${match}${guards}`);
   }
   if (/<html(\s[^>]*)?>/i.test(html)) {
     return html.replace(
       /<html(\s[^>]*)?>/i,
-      (match) => `${match}<head>${cspMeta}</head>`,
+      (match) => `${match}<head>${guards}</head>`,
     );
   }
-  return `<!doctype html><html lang="ko"><head>${cspMeta}</head><body>${html}</body></html>`;
+  return `<!doctype html><html lang="ko"><head>${guards}</head><body>${html}</body></html>`;
 }
 
 function formatDate(value) {
