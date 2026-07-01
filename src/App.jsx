@@ -168,6 +168,7 @@ function App() {
   const [comment, setComment] = useState("");
   const [isPlayerFullscreen, setIsPlayerFullscreen] = useState(false);
   const playerPanelRef = useRef(null);
+  const quizFrameRef = useRef(null);
   const [draft, setDraft] = useState({
     title: "",
     subject: "물리",
@@ -206,9 +207,14 @@ function App() {
 
   useEffect(() => {
     function syncFullscreenState() {
-      if (!document.fullscreenElement) {
-        setIsPlayerFullscreen(false);
-      }
+      const fullscreenElement = document.fullscreenElement;
+      setIsPlayerFullscreen(
+        Boolean(
+          fullscreenElement &&
+            (fullscreenElement === quizFrameRef.current ||
+              fullscreenElement === playerPanelRef.current),
+        ),
+      );
     }
     document.addEventListener("fullscreenchange", syncFullscreenState);
     return () => document.removeEventListener("fullscreenchange", syncFullscreenState);
@@ -489,17 +495,28 @@ function App() {
   }
 
   async function togglePlayerFullscreen() {
-    const panel = playerPanelRef.current;
-    if (!panel) return;
-    if (isPlayerFullscreen || document.fullscreenElement) {
-      if (document.fullscreenElement) {
-        await document.exitFullscreen().catch(() => undefined);
-      }
+    if (document.fullscreenElement) {
+      await document.exitFullscreen().catch(() => undefined);
       setIsPlayerFullscreen(false);
       return;
     }
-    setIsPlayerFullscreen(true);
-    await panel.requestFullscreen?.().catch(() => undefined);
+
+    const frame = quizFrameRef.current;
+    const panel = playerPanelRef.current;
+    const fullscreenTargets = [frame, panel].filter(Boolean);
+
+    for (const target of fullscreenTargets) {
+      if (typeof target.requestFullscreen !== "function") continue;
+      try {
+        await target.requestFullscreen();
+        setIsPlayerFullscreen(true);
+        return;
+      } catch {
+        // Try the next target. Some browsers reject iframe fullscreen.
+      }
+    }
+
+    setIsPlayerFullscreen(false);
   }
 
   return (
@@ -619,6 +636,7 @@ function App() {
             selectedIsLiked={selectedIsLiked}
             isPlayerFullscreen={isPlayerFullscreen}
             playerPanelRef={playerPanelRef}
+            quizFrameRef={quizFrameRef}
             safeActiveQuizHtml={safeActiveQuizHtml}
             comment={comment}
             newestQuizzes={newestQuizzes}
@@ -798,6 +816,7 @@ function PlayView({
   selectedIsLiked,
   isPlayerFullscreen,
   playerPanelRef,
+  quizFrameRef,
   safeActiveQuizHtml,
   comment,
   newestQuizzes,
@@ -839,10 +858,7 @@ function PlayView({
       </div>
 
       <div className="play-layout">
-        <section
-          className={`studio-panel player-panel ${isPlayerFullscreen ? "is-fullscreen" : ""}`}
-          ref={playerPanelRef}
-        >
+        <section className="studio-panel player-panel" ref={playerPanelRef}>
           <div className="panel-heading player-heading">
             <div>
               <h2>플레이어</h2>
@@ -872,6 +888,7 @@ function PlayView({
 
           <iframe
             className="quiz-frame play-frame"
+            ref={quizFrameRef}
             title={`${activeQuiz.title} 플레이`}
             sandbox="allow-scripts allow-forms allow-modals"
             allow="fullscreen"

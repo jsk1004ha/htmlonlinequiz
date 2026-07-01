@@ -849,6 +849,14 @@ textarea:focus {
   height: auto;
 }
 
+.quiz-frame:fullscreen {
+  width: 100vw;
+  height: 100vh;
+  min-height: 0;
+  border: 0;
+  background: white;
+}
+
 .comments {
   border-top: 1px solid var(--line);
   padding: 14px 18px 18px;
